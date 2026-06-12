@@ -69,7 +69,7 @@ const HIGH_SCORE_KEY = 'phdodgeHighScore';
 
 // Debug switch.
 // Set this to true when you want to test late-game patterns without dying.
-const IS_INVINCIBLE_MODE = true;
+const IS_INVINCIBLE_MODE = false;
 
 const MAX_ENEMIES = 165;
 const MAX_GIANTS = 3;
