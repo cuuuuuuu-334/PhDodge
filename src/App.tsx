@@ -67,6 +67,10 @@ interface Shockwave {
 
 const HIGH_SCORE_KEY = 'phdodgeHighScore';
 
+// Debug switch.
+// Set this to true when you want to test late-game patterns without dying.
+const IS_INVINCIBLE_MODE = true;
+
 const MAX_ENEMIES = 165;
 const MAX_GIANTS = 3;
 const MAX_HOMING = 10;
@@ -89,10 +93,59 @@ const SHOCKWAVE_START_SCORE = 11;
 const SHOCKWAVE_COOLDOWN = 5200;
 const SHOCKWAVE_WARNING_TIME = 850;
 
+const SHOCKWAVE_SPIKE_COUNT = 32;
+const SHOCKWAVE_GAP_EVERY = 4;
+const SHOCKWAVE_SPIKE_HALF_ANGLE = Math.PI / 54;
+const SHOCKWAVE_INNER_OFFSET = 9;
+const SHOCKWAVE_OUTER_OFFSET = 14;
+
 const DEADLINE_WALL_START_SCORE = 15;
 const DEADLINE_WALL_COOLDOWN = 5600;
 const WALL_GAP_SIZE = 155;
 const WALL_SPACING = 34;
+
+const normalizeAngle = (angle: number) => {
+  const full = Math.PI * 2;
+  return ((angle % full) + full) % full;
+};
+
+const angularDistance = (a: number, b: number) => {
+  const full = Math.PI * 2;
+  const diff = Math.abs(normalizeAngle(a) - normalizeAngle(b));
+  return Math.min(diff, full - diff);
+};
+
+const getShockwavePhase = () => {
+  return 0;
+};
+
+const isShockwaveSpikeActive = (index: number) => {
+  return index % SHOCKWAVE_GAP_EVERY !== 0;
+};
+
+const isShockwaveAngleDangerous = (
+  angle: number,
+  shockwave: Shockwave,
+  playerRadius: number,
+) => {
+  const phase = getShockwavePhase();
+  const spacing = (Math.PI * 2) / SHOCKWAVE_SPIKE_COUNT;
+  const expandedHalfAngle =
+    SHOCKWAVE_SPIKE_HALF_ANGLE +
+    Math.min(0.08, playerRadius / Math.max(shockwave.radius, 1));
+
+  for (let i = 0; i < SHOCKWAVE_SPIKE_COUNT; i++) {
+    if (!isShockwaveSpikeActive(i)) continue;
+
+    const spikeAngle = phase + i * spacing;
+
+    if (angularDistance(angle, spikeAngle) < expandedHalfAngle) {
+      return true;
+    }
+  }
+
+  return false;
+};
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -127,6 +180,7 @@ export default function App() {
   const lastArcSpikeRef = useRef<number>(0);
   const lastShockwaveRef = useRef<number>(0);
   const lastDeadlineWallRef = useRef<number>(0);
+  const lastInvincibleSparkRef = useRef<number>(0);
   const animationFrameId = useRef<number>(0);
 
   const countEnemiesByType = (type: EnemyType) => {
@@ -158,6 +212,7 @@ export default function App() {
     lastArcSpikeRef.current = 0;
     lastShockwaveRef.current = 0;
     lastDeadlineWallRef.current = 0;
+    lastInvincibleSparkRef.current = 0;
 
     setScore(0);
     setGameState('PLAYING');
@@ -184,6 +239,22 @@ export default function App() {
         size: Math.random() * 3 + 1,
       });
     }
+  };
+
+  const handlePlayerHit = (time: number) => {
+    const player = playerRef.current;
+
+    if (IS_INVINCIBLE_MODE) {
+      if (time - lastInvincibleSparkRef.current > 120) {
+        createExplosion(player.x, player.y, player.color, 7);
+        lastInvincibleSparkRef.current = time;
+      }
+
+      return false;
+    }
+
+    createExplosion(player.x, player.y, player.color, 50);
+    return true;
   };
 
   const spawnEnemy = (canvasWidth: number, canvasHeight: number) => {
@@ -374,7 +445,8 @@ export default function App() {
       const fromLeft = direction === 0;
       const x = fromLeft ? -radius * 2 : canvasWidth + radius * 2;
       const vx = fromLeft ? speed : -speed;
-      const gapCenter = WALL_GAP_SIZE / 2 + Math.random() * (canvasHeight - WALL_GAP_SIZE);
+      const gapCenter =
+        WALL_GAP_SIZE / 2 + Math.random() * (canvasHeight - WALL_GAP_SIZE);
 
       for (let y = 20; y <= canvasHeight - 20; y += WALL_SPACING) {
         if (Math.abs(y - gapCenter) < WALL_GAP_SIZE / 2) continue;
@@ -396,7 +468,8 @@ export default function App() {
       const fromTop = direction === 2;
       const y = fromTop ? -radius * 2 : canvasHeight + radius * 2;
       const vy = fromTop ? speed : -speed;
-      const gapCenter = WALL_GAP_SIZE / 2 + Math.random() * (canvasWidth - WALL_GAP_SIZE);
+      const gapCenter =
+        WALL_GAP_SIZE / 2 + Math.random() * (canvasWidth - WALL_GAP_SIZE);
 
       for (let x = 20; x <= canvasWidth - 20; x += WALL_SPACING) {
         if (Math.abs(x - gapCenter) < WALL_GAP_SIZE / 2) continue;
@@ -492,7 +565,13 @@ export default function App() {
       ctx.shadowColor = shockwave.color;
 
       ctx.beginPath();
-      ctx.arc(shockwave.x, shockwave.y, pulseRadius + progress * 28, 0, Math.PI * 2);
+      ctx.arc(
+        shockwave.x,
+        shockwave.y,
+        pulseRadius + progress * 28,
+        0,
+        Math.PI * 2,
+      );
       ctx.stroke();
 
       ctx.beginPath();
@@ -506,22 +585,48 @@ export default function App() {
       return;
     }
 
+    const phase = getShockwavePhase();
+    const spacing = (Math.PI * 2) / SHOCKWAVE_SPIKE_COUNT;
+    const baseRadius = Math.max(1, shockwave.radius - SHOCKWAVE_INNER_OFFSET);
+    const tipRadius = shockwave.radius + SHOCKWAVE_OUTER_OFFSET;
+
     ctx.save();
-    ctx.globalAlpha = 0.86;
-    ctx.strokeStyle = shockwave.color;
-    ctx.lineWidth = shockwave.thickness;
-    ctx.shadowBlur = 20;
+    ctx.globalAlpha = 0.9;
+    ctx.shadowBlur = 18;
     ctx.shadowColor = shockwave.color;
 
-    ctx.beginPath();
-    ctx.arc(shockwave.x, shockwave.y, shockwave.radius, 0, Math.PI * 2);
-    ctx.stroke();
+    for (let i = 0; i < SHOCKWAVE_SPIKE_COUNT; i++) {
+      if (!isShockwaveSpikeActive(i)) continue;
 
-    ctx.globalAlpha = 0.32;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(shockwave.x, shockwave.y, shockwave.radius - 15, 0, Math.PI * 2);
-    ctx.stroke();
+      const angle = phase + i * spacing;
+
+      const tipX = shockwave.x + Math.cos(angle) * tipRadius;
+      const tipY = shockwave.y + Math.sin(angle) * tipRadius;
+
+      const leftAngle = angle - SHOCKWAVE_SPIKE_HALF_ANGLE;
+      const rightAngle = angle + SHOCKWAVE_SPIKE_HALF_ANGLE;
+
+      const leftX = shockwave.x + Math.cos(leftAngle) * baseRadius;
+      const leftY = shockwave.y + Math.sin(leftAngle) * baseRadius;
+
+      const rightX = shockwave.x + Math.cos(rightAngle) * baseRadius;
+      const rightY = shockwave.y + Math.sin(rightAngle) * baseRadius;
+
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(leftX, leftY);
+      ctx.lineTo(rightX, rightY);
+      ctx.closePath();
+
+      ctx.fillStyle = shockwave.color;
+      ctx.fill();
+
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.globalAlpha = 0.9;
+    }
 
     ctx.restore();
   };
@@ -731,9 +836,8 @@ export default function App() {
           enemy.type === 'spike' ? enemy.radius + 3 : enemy.radius;
 
         if (distance < player.radius + collisionRadius - 2) {
-          isGameOver = true;
-          createExplosion(player.x, player.y, player.color, 50);
-          break;
+          isGameOver = handlePlayerHit(time);
+          if (isGameOver) break;
         }
 
         if (
@@ -757,11 +861,20 @@ export default function App() {
             const dy = player.y - shockwave.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
             const ringDistance = Math.abs(distance - shockwave.radius);
+            const playerAngle = Math.atan2(dy, dx);
 
-            if (ringDistance < player.radius + shockwave.thickness / 2) {
-              isGameOver = true;
-              createExplosion(player.x, player.y, player.color, 50);
-              break;
+            const isOnSpike = isShockwaveAngleDangerous(
+              playerAngle,
+              shockwave,
+              player.radius,
+            );
+
+            const isInsideSpikeBand =
+              ringDistance < player.radius + SHOCKWAVE_OUTER_OFFSET;
+
+            if (isOnSpike && isInsideSpikeBand) {
+              isGameOver = handlePlayerHit(time);
+              if (isGameOver) break;
             }
 
             if (shockwave.radius > shockwave.maxRadius) {
@@ -1108,6 +1221,12 @@ export default function App() {
                 Best: {highScore.toFixed(2)} s
               </div>
             )}
+
+            {IS_INVINCIBLE_MODE && (
+              <div className="rounded-lg border border-emerald-400/50 bg-emerald-950/60 px-3 py-1 font-mono text-sm font-bold text-emerald-300 backdrop-blur-md drop-shadow-[0_0_5px_rgba(52,211,153,0.7)]">
+                INVINCIBLE DEBUG
+              </div>
+            )}
           </div>
         )}
 
@@ -1148,7 +1267,7 @@ export default function App() {
       </div>
 
       <div className="mt-6 max-w-[800px] text-center font-mono text-xs text-slate-600">
-      Made by cc · Just for uu&apos;s little procrastination breaks. Enjoy!
+        Made by cc · Just for uu&apos;s little procrastination breaks. Enjoy!
       </div>
     </div>
   );
